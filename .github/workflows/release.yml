@@ -3,27 +3,47 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
 
       - name: Build
         run: go build ./...
 
-      - name: Test
-        run: go test ./...
+      - name: Warm Go module proxy
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p /tmp/pkgsite-release-check
+          cd /tmp/pkgsite-release-check
+          go mod init release-check
+          GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org go list -m github.com/kzzan/s3kit@${TAG}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

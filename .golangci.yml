@@ -1,0 +1,19 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - modernize
+    - staticcheck
+    - unused
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

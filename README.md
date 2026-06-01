@@ -23,12 +23,14 @@ A simple, idiomatic Go SDK for S3-compatible object storage. Works with AWS S3, 
 ## Installation
 
 ```bash
-go get github.com/kzzan/s3kit
+go get github.com/kzzan/s3kit@latest
 ```
 
 Requires Go 1.26+.
 
 ## Quick Start
+
+**AWS S3 using the default credential chain**
 
 ```go
 package main
@@ -43,9 +45,6 @@ import (
 
 func main() {
     client, err := s3kit.New(s3kit.Config{
-        Endpoint:        "https://s3.amazonaws.com",
-        AccessKeyID:     "your-access-key",
-        SecretAccessKey: "your-secret-key",
         Region:          "us-east-1",
     })
     if err != nil {
@@ -66,13 +65,26 @@ func main() {
 }
 ```
 
+`s3kit.New` uses the AWS SDK v2 default credential chain when `AccessKeyID` and `SecretAccessKey` are omitted.
+
+**S3-compatible storage with explicit credentials**
+
+```go
+client, err := s3kit.New(s3kit.Config{
+    Endpoint:        "http://localhost:9000",
+    AccessKeyID:     "minioadmin",
+    SecretAccessKey: "minioadmin",
+})
+```
+
 ## Configuration
 
 | Field | Description | Default |
 |---|---|---|
-| `Endpoint` | S3-compatible endpoint URL | required |
-| `AccessKeyID` | Access key / username | required |
-| `SecretAccessKey` | Secret key / password | required |
+| `Endpoint` | S3-compatible endpoint URL. Leave empty for AWS default endpoint resolution. | optional |
+| `AccessKeyID` | Access key / username. Leave empty to use the AWS SDK default credential chain. | optional |
+| `SecretAccessKey` | Secret key / password paired with `AccessKeyID`. | optional |
+| `SessionToken` | Optional session token for temporary credentials. | empty |
 | `Region` | Region name | `us-east-1` |
 
 **MinIO**
@@ -82,6 +94,7 @@ client, err := s3kit.New(s3kit.Config{
     Endpoint:        "http://localhost:9000",
     AccessKeyID:     "minioadmin",
     SecretAccessKey: "minioadmin",
+    SessionToken:    "",
 })
 ```
 
@@ -140,7 +153,7 @@ err := client.MoveObject(ctx, "bucket", "old-key", "new-key")
 // Content-type is detected automatically from the file extension
 err := client.UploadFile(ctx, "bucket", "key", "/path/to/file.jpg")
 
-// Atomic: writes to a temp file first, renames on success, cleans up on failure
+// Atomic: creates parent directories, writes to a temp file first, renames on success
 err := client.DownloadFile(ctx, "bucket", "key", "/path/to/dest.jpg")
 ```
 
@@ -150,6 +163,39 @@ err := client.DownloadFile(ctx, "bucket", "key", "/path/to/dest.jpg")
 url, err := client.PresignGetObject(ctx, "bucket", "key", time.Hour)
 url, err := client.PresignPutObject(ctx, "bucket", "key", 15*time.Minute)
 ```
+
+## Development
+
+```bash
+go test ./...
+go vet ./...
+go mod tidy
+```
+
+CI also runs `golangci-lint`, `govulncheck`, and a `go mod tidy` drift check on every pull request.
+
+## Versioning Policy
+
+- The module target is Go 1.26 and the codebase prefers current Go syntax and standard library APIs.
+- The current public line is `v0.x`. In Go module semantics, `v0` means the API is still stabilizing and compatibility promises are intentionally weaker.
+- New public releases are published by pushing a semantic version tag such as `v0.0.2`, `v0.1.0`, or `v1.0.0`. That tag is what Go tooling and `pkg.go.dev` index.
+- For the current `v0` line:
+  - `v0.0.z` should be used for fixes and low-risk adjustments.
+  - `v0.y.0` may include API reshaping while the package is still being validated.
+  - even in `v0`, avoid unnecessary breakage because early adopters still pin these versions in production.
+- Once the exported API and behavior are intentionally stable, cut `v1.0.0`. From that point on, `v1` patch and minor releases should remain backward compatible.
+- Breaking changes after `v1.0.0` must ship in a new major module path such as `github.com/kzzan/s3kit/v2`, not by rewriting `v1`.
+- Dependency upgrades should default to `go get -u=patch ./...` plus a full test run.
+- Pre-v1 modules require extra review because SemVer compatibility guarantees are weaker before v1.0.0.
+
+## Release Process
+
+```bash
+git tag v0.0.2
+git push origin v0.0.2
+```
+
+The release workflow validates the tag, creates a GitHub Release, and warms the Go module proxy so the new version is picked up by `pkg.go.dev` without changing older published versions.
 
 ## License
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// DetectContentType infers a content type from a file extension.
 func DetectContentType(filename string) string {
 	ext := strings.ToLower(strings.TrimPrefix(path.Ext(filename), "."))
 	if mimeType, ok := contentTypeMap[ext]; ok {
