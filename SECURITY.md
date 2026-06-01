@@ -8,7 +8,7 @@ Security fixes are applied to:
 |---|---|
 | `main` | yes |
 | Latest tagged release | yes |
-| Older releases | no |
+| Older releases | no | 
 
 ## Reporting a Vulnerability
 
