@@ -166,7 +166,9 @@ func (c *Client) GetObjectBytes(ctx context.Context, bucket, key string) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	defer obj.Close()
+	defer func() {
+		_ = obj.Close()
+	}()
 	return io.ReadAll(obj)
 }
 
@@ -272,7 +274,9 @@ func (c *Client) UploadFile(ctx context.Context, bucket, key, localPath string) 
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	_, err = c.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket:      aws.String(bucket),
@@ -302,16 +306,16 @@ func (c *Client) DownloadFile(ctx context.Context, bucket, key, localPath string
 		WriterAt: tmp,
 	})
 	if err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := os.Rename(tmpPath, localPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	return nil
