@@ -12,6 +12,7 @@ A simple, idiomatic Go SDK for S3-compatible object storage. Works with AWS S3, 
 
 - Bucket operations: create, delete, list, check existence, empty
 - Object operations: put, get, delete, copy, move, list
+- Historical object operations by version ID or 1-based version number
 - `ListObjects` auto-paginates — returns all objects regardless of count
 - `DeleteObjects` auto-batches — handles any number of keys (1000/request limit handled internally)
 - File upload/download with automatic content-type detection (100+ extensions)
@@ -121,6 +122,7 @@ err  := client.WaitBucketExists(ctx, "my-bucket", 30*time.Second)
 
 buckets, err := client.ListBuckets(ctx)
 err          := client.EmptyBucket(ctx, "my-bucket")
+err          := client.EmptyBucketVersions(ctx, "my-bucket")
 ```
 
 ### Object Operations
@@ -129,22 +131,47 @@ err          := client.EmptyBucket(ctx, "my-bucket")
 // Write
 err := client.PutObject(ctx, "bucket", "key", reader, "application/octet-stream")
 err := client.PutObjectBytes(ctx, "bucket", "key", data, "text/plain")
+versionID, err := client.PutObjectVersion(ctx, "bucket", "key", reader, "application/octet-stream")
+versionID, err := client.PutObjectBytesVersion(ctx, "bucket", "key", data, "text/plain")
 
 // Read
 body, err := client.GetObject(ctx, "bucket", "key")   // caller must close
 data, err := client.GetObjectBytes(ctx, "bucket", "key")
+body, err := client.GetObjectVersion(ctx, "bucket", "key", "version-id")
+data, err := client.GetObjectVersionBytes(ctx, "bucket", "key", "version-id")
+body, err := client.GetObjectVersionByNumber(ctx, "bucket", "key", 2)
+data, err := client.GetObjectVersionBytesByNumber(ctx, "bucket", "key", 2)
 
 // Delete
 err := client.DeleteObject(ctx, "bucket", "key")
+err := client.DeleteObjectVersion(ctx, "bucket", "key", "version-id")
+err := client.DeleteObjectVersionByNumber(ctx, "bucket", "key", 2)
 err := client.DeleteObjects(ctx, "bucket", []string{"key1", "key2"})  // auto-batches >1000 keys
+err := client.DeleteObjectVersions(ctx, "bucket", []s3kit.ObjectVersionIdentifier{
+    {Key: "key1", VersionID: "version-id-1"},
+    {Key: "key2", VersionID: "version-id-2"},
+})
+err := client.DeleteObjectVersionsByNumber(ctx, "bucket", []s3kit.ObjectVersionNumberIdentifier{
+    {Key: "key1", VersionNumber: 1},
+    {Key: "key2", VersionNumber: 2},
+})
+err := client.DeleteAllObjectVersions(ctx, "bucket", "key")
 
 // Query
 exists, err := client.ObjectExists(ctx, "bucket", "key")
+exists, err := client.ObjectVersionExists(ctx, "bucket", "key", "version-id")
+exists, err := client.ObjectVersionExistsByNumber(ctx, "bucket", "key", 2)
 keys,   err := client.ListObjects(ctx, "bucket", "prefix/")  // auto-paginates, returns all objects
+versions, err := client.ListObjectVersions(ctx, "bucket", "key")
+versionID, err := client.ObjectVersionID(ctx, "bucket", "key", 2)
 
 // Transform
 err := client.CopyObject(ctx, "src-bucket", "src-key", "dst-bucket", "dst-key")
+versionID, err := client.CopyObjectVersion(ctx, "src-bucket", "src-key", "version-id", "dst-bucket", "dst-key")
+versionID, err := client.CopyObjectVersionByNumber(ctx, "src-bucket", "src-key", 2, "dst-bucket", "dst-key")
 err := client.MoveObject(ctx, "bucket", "old-key", "new-key")
+versionID, err := client.MoveObjectVersion(ctx, "bucket", "old-key", "version-id", "new-key")
+versionID, err := client.MoveObjectVersionByNumber(ctx, "bucket", "old-key", 2, "new-key")
 ```
 
 ### File Transfer
@@ -152,15 +179,20 @@ err := client.MoveObject(ctx, "bucket", "old-key", "new-key")
 ```go
 // Content-type is detected automatically from the file extension
 err := client.UploadFile(ctx, "bucket", "key", "/path/to/file.jpg")
+versionID, err := client.UploadFileVersion(ctx, "bucket", "key", "/path/to/file.jpg")
 
 // Atomic: creates parent directories, writes to a temp file first, renames on success
 err := client.DownloadFile(ctx, "bucket", "key", "/path/to/dest.jpg")
+err := client.DownloadFileVersion(ctx, "bucket", "key", "/path/to/dest.jpg", "version-id")
+err := client.DownloadFileVersionByNumber(ctx, "bucket", "key", "/path/to/dest.jpg", 2)
 ```
 
 ### Presigned URLs
 
 ```go
 url, err := client.PresignGetObject(ctx, "bucket", "key", time.Hour)
+url, err := client.PresignGetObjectVersion(ctx, "bucket", "key", "version-id", time.Hour)
+url, err := client.PresignGetObjectVersionByNumber(ctx, "bucket", "key", 2, time.Hour)
 url, err := client.PresignPutObject(ctx, "bucket", "key", 15*time.Minute)
 ```
 
