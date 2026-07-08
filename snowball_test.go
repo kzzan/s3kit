@@ -29,6 +29,15 @@ func TestSnowballAutoExtractMetadataReturnsFreshMap(t *testing.T) {
 	}
 }
 
+func TestArchiveTransferOptionsDefaultModeIsPortable(t *testing.T) {
+	t.Parallel()
+
+	got := ArchiveTransferOptions{}.normalized()
+	if got.Mode != ArchiveExtractPortable {
+		t.Fatalf("expected default mode %q, got %q", ArchiveExtractPortable, got.Mode)
+	}
+}
+
 func TestValidateArchiveTransferOptions(t *testing.T) {
 	t.Parallel()
 

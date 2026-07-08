@@ -2,6 +2,9 @@ package s3kit
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -117,5 +120,35 @@ func TestDetectArchiveFormat(t *testing.T) {
 				t.Fatalf("expected format %q, got %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestOpenArchiveSourceFromURLDoesNotRequireSourceBucket(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		_, _ = w.Write([]byte("archive bytes"))
+	}))
+	defer server.Close()
+
+	body, err := openArchiveSource(t.Context(), nil, ArchiveTransferOptions{
+		SourceURL: server.URL + "/archives/data.tar",
+	})
+	if err != nil {
+		t.Fatalf("expected URL source to open without source client or bucket, got %v", err)
+	}
+	defer func() {
+		_ = body.Close()
+	}()
+
+	got, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(got) != "archive bytes" {
+		t.Fatalf("expected archive bytes, got %q", got)
 	}
 }

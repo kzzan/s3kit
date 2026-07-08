@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kzzan/s3kit/utils"
@@ -419,7 +420,7 @@ func extractTarArchive(
 		if err != nil {
 			return nil, fmt.Errorf("read tar entry: %w", err)
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if !header.FileInfo().Mode().IsRegular() {
 			continue
 		}
 		if err := tracker.add(header.Size); err != nil {
@@ -513,10 +514,8 @@ func cleanArchiveEntryName(name string) (string, error) {
 	if strings.HasPrefix(normalized, "/") {
 		return "", fmt.Errorf("%w: absolute name %q", ErrInvalidArchiveEntryName, name)
 	}
-	for _, part := range strings.Split(normalized, "/") {
-		if part == ".." {
-			return "", fmt.Errorf("%w: parent segment in %q", ErrInvalidArchiveEntryName, name)
-		}
+	if slices.Contains(strings.Split(normalized, "/"), "..") {
+		return "", fmt.Errorf("%w: parent segment in %q", ErrInvalidArchiveEntryName, name)
 	}
 
 	cleanName := path.Clean(normalized)
