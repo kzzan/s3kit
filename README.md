@@ -19,7 +19,23 @@ A simple, idiomatic Go SDK for S3-compatible object storage. Works with AWS S3, 
 - `DownloadFile` is atomic — no partial files left on failure
 - Presigned URLs for GET and PUT
 - Multipart upload/download via `aws-sdk-go-v2/feature/s3/transfermanager`
+- MinIO Snowball Auto-Extract for `.tar`, `.tgz`, and `.zip` bulk imports
 - Minimal API surface — one struct, zero global state
+
+## Common Extension Areas
+
+The current API focuses on the high-frequency object workflows most services need.
+For a broader S3 component library, these are practical extension areas that fit the
+same style:
+
+- Bucket administration: versioning, lifecycle rules, object lock, retention, legal hold
+- Object metadata: tags, user metadata, content disposition, cache control, checksums
+- Security controls: server-side encryption, public access checks, bucket policies, scoped presigned operations
+- Transfer ergonomics: range reads, resumable multipart uploads, multipart copy, progress callbacks
+- Batch workflows: prefix sync, mirror/copy between buckets, manifest-driven delete/copy/move
+- Import/export: archive packing, archive upload, portable archive extraction, Snowball-style bulk migration
+- Observability: structured request logging, retry visibility, transfer metrics, operation timing
+- Compatibility helpers: MinIO/RustFS/AWS endpoint presets, path-style defaults, health checks
 
 ## Installation
 
@@ -99,6 +115,146 @@ client, err := s3kit.New(s3kit.Config{
 })
 ```
 
+### MinIO Snowball Support Guide
+
+In MinIO-centered systems, "Snowball" usually means one of two workflows.
+
+**1. Snowball-style archive ingestion**
+
+This is a bulk migration pattern for moving many files efficiently. Instead of
+issuing one S3 request per small file, the producer packs files into an archive,
+optionally compresses it, uploads the archive as a large object, and then runs an
+import/extraction workflow on the MinIO side or in a worker process.
+
+Recommended library-level support:
+
+- Build an archive manifest with source path, target object key, size, checksum,
+  content type, and optional user metadata.
+- Pack small files into `tar`, `tar.gz`, or `tar.zst` archives outside the hot S3 path.
+- Upload the archive with `PutObject`, `UploadFile`, or multipart transfer for large files.
+- Verify the uploaded archive size and checksum before extraction/import.
+- Use prefix-scoped destination keys so retries can be idempotent.
+- Record failed entries and resume from the manifest instead of restarting the whole migration.
+
+MinIO can extract `.tar`, `.tgz`, and `.zip` archives on the server when the
+uploaded object includes this user metadata:
+
+```text
+X-Amz-Meta-Snowball-Auto-Extract: true
+```
+
+The MinIO Client equivalent is:
+
+```bash
+mc cp my-large-files.tar myminio/mybucket/ --attr "X-Amz-Meta-Snowball-Auto-Extract=true"
+```
+
+With `s3kit`, use `UploadFileSnowballAutoExtract` for local archive files:
+
+```go
+client, err := s3kit.New(s3kit.Config{
+    Endpoint:        "http://localhost:9000",
+    AccessKeyID:     "minioadmin",
+    SecretAccessKey: "minioadmin",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+if err := client.UploadFileSnowballAutoExtract(ctx, "mybucket", "imports/my-large-files.tar", "/data/my-large-files.tar"); err != nil {
+    log.Fatal(err)
+}
+```
+
+The method sends metadata key `snowball-auto-extract=true`; the AWS SDK turns
+that into the wire header `x-amz-meta-snowball-auto-extract: true`.
+
+For compatibility with AWS S3, RustFS, and MinIO, use `TransferArchiveAndExtract`
+in portable mode. Portable mode downloads the archive to a temporary local file,
+extracts it in the application, and uploads each extracted entry with normal S3
+object APIs. The source can be an HTTP(S) or presigned URL, so no source bucket
+is required:
+
+```go
+destination, err := s3kit.New(s3kit.Config{
+    Endpoint:        "http://rustfs.example.com:9001",
+    AccessKeyID:     "destination-access-key",
+    SecretAccessKey: "destination-secret-key",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+result, err := s3kit.TransferArchiveAndExtract(ctx, nil, destination, s3kit.ArchiveTransferOptions{
+    SourceURL:             "https://source.example.com/daily/my-large-files.zip?signature=...",
+    DestinationBucket:     "imports",
+    DestinationArchiveKey: "raw/daily/my-large-files.zip",
+    ExtractPrefix:         "expanded/daily/my-large-files/",
+    Mode:                  s3kit.ArchiveExtractPortable,
+    MaxEntries:            10000,
+    MaxUncompressedSize:   20 << 30,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("extracted %d objects\n", len(result.Extracted))
+```
+
+Use `ArchiveExtractPortable` for AWS S3, RustFS, MinIO, and generic
+S3-compatible targets. Use `ArchiveExtractMinIOSnowball` only when the
+destination is MinIO and you want server-side extraction:
+
+```go
+_, err := s3kit.TransferArchiveAndExtract(ctx, nil, minio, s3kit.ArchiveTransferOptions{
+    SourceURL:             "https://source.example.com/daily/my-large-files.zip?signature=...",
+    DestinationBucket:     "imports",
+    DestinationArchiveKey: "snowball/daily/my-large-files.zip",
+    Mode:                  s3kit.ArchiveExtractMinIOSnowball,
+})
+```
+
+For already-open archive streams, use `PutObjectSnowballAutoExtract`:
+
+```go
+file, err := os.Open("/data/my-large-files.zip")
+if err != nil {
+    log.Fatal(err)
+}
+defer file.Close()
+
+err = client.PutObjectSnowballAutoExtract(
+    ctx,
+    "mybucket",
+    "imports/my-large-files.zip",
+    file,
+    "application/zip",
+)
+```
+
+**2. AWS Snowball device interoperability**
+
+AWS Snowball and Snowball Edge expose S3-compatible endpoints for data movement.
+When a device or gateway is reachable on the network, configure `s3kit` like any
+other S3-compatible service. `s3kit` already enables path-style addressing when
+`Endpoint` is set, which is the safest default for appliance-style S3 endpoints.
+
+```go
+client, err := s3kit.New(s3kit.Config{
+    Endpoint:        "https://snowball-device.local:8080",
+    AccessKeyID:     "device-access-key",
+    SecretAccessKey: "device-secret-key",
+    Region:          "us-east-1",
+})
+```
+
+Operational notes:
+
+- Prefer multipart upload/download for large Snowball transfers.
+- Keep object keys deterministic and prefix-scoped so the same manifest can be replayed.
+- Validate checksums after transfer; device-side ETags are not always enough for business-level verification.
+- Avoid relying on advanced bucket features unless the specific device mode documents support for them.
+- Treat Snowball as an S3-compatible transport target, then use normal AWS import/export procedures outside this package.
+
 **RustFS**
 
 ```go
@@ -130,7 +286,9 @@ err          := client.EmptyBucketVersions(ctx, "my-bucket")
 ```go
 // Write
 err := client.PutObject(ctx, "bucket", "key", reader, "application/octet-stream")
+err := client.PutObjectSnowballAutoExtract(ctx, "bucket", "archive.zip", reader, "application/zip")
 err := client.PutObjectBytes(ctx, "bucket", "key", data, "text/plain")
+err := client.PutObjectBytesSnowballAutoExtract(ctx, "bucket", "archive.zip", data, "application/zip")
 versionID, err := client.PutObjectVersion(ctx, "bucket", "key", reader, "application/octet-stream")
 versionID, err := client.PutObjectBytesVersion(ctx, "bucket", "key", data, "text/plain")
 
@@ -181,11 +339,55 @@ versionID, err := client.MoveObjectVersionByNumber(ctx, "bucket", "old-key", 2, 
 err := client.UploadFile(ctx, "bucket", "key", "/path/to/file.jpg")
 versionID, err := client.UploadFileVersion(ctx, "bucket", "key", "/path/to/file.jpg")
 
+// MinIO Snowball Auto-Extract: uploads the archive with
+// x-amz-meta-snowball-auto-extract: true
+err := client.UploadFileSnowballAutoExtract(ctx, "bucket", "imports/data.tar", "/path/to/data.tar")
+
 // Atomic: creates parent directories, writes to a temp file first, renames on success
 err := client.DownloadFile(ctx, "bucket", "key", "/path/to/dest.jpg")
 err := client.DownloadFileVersion(ctx, "bucket", "key", "/path/to/dest.jpg", "version-id")
 err := client.DownloadFileVersionByNumber(ctx, "bucket", "key", "/path/to/dest.jpg", 2)
 ```
+
+### MinIO Snowball Auto-Extract Transfer
+
+```go
+err := s3kit.TransferSnowballAutoExtract(ctx, source, destination, s3kit.SnowballAutoExtractTransferOptions{
+    SourceBucket:      "exports",
+    SourceKey:         "archive.zip",
+    DestinationBucket: "imports",
+    DestinationKey:    "snowball/archive.zip",
+})
+
+err = s3kit.TransferSnowballAutoExtract(ctx, nil, destination, s3kit.SnowballAutoExtractTransferOptions{
+    SourceURL:         "https://source.example.com/archive.zip?signature=...",
+    DestinationBucket: "imports",
+    DestinationKey:    "snowball/archive.zip",
+})
+```
+
+The source client reads the archive with `GetObject`; the destination client
+uploads it with multipart transfer and `x-amz-meta-snowball-auto-extract: true`.
+Use `SourceURL` for presigned or HTTP(S) sources when no source bucket is
+available. Use this mode only when the destination is MinIO.
+
+### Portable Archive Transfer and Extraction
+
+```go
+result, err := s3kit.TransferArchiveAndExtract(ctx, nil, destination, s3kit.ArchiveTransferOptions{
+    SourceURL:             "https://source.example.com/archive.tgz?signature=...",
+    DestinationBucket:     "imports",
+    DestinationArchiveKey: "raw/archive.tgz",
+    ExtractPrefix:         "expanded/archive/",
+    Mode:                  s3kit.ArchiveExtractPortable,
+})
+```
+
+Portable mode supports `.zip`, `.tar`, `.tgz`, and `.tar.gz`. It works with AWS
+S3, MinIO, RustFS, and generic S3-compatible destinations because it extracts in
+the application and writes normal objects. Set `SourceURL` for presigned or
+HTTP(S) sources when no source bucket is available; otherwise pass a source
+client with `SourceBucket` and `SourceKey`.
 
 ### Presigned URLs
 

@@ -165,7 +165,23 @@ func (c *Client) ListBuckets(ctx context.Context) ([]string, error) {
 
 // PutObject uploads data from body to the given bucket and key.
 func (c *Client) PutObject(ctx context.Context, bucket, key string, body io.Reader, contentType string) error {
-	_, err := c.putObject(ctx, bucket, key, body, contentType)
+	_, err := c.putObject(ctx, bucket, key, body, contentType, nil)
+	return err
+}
+
+// PutObjectSnowballAutoExtract uploads an archive and asks MinIO to extract it
+// server-side by sending x-amz-meta-snowball-auto-extract: true.
+//
+// This is a MinIO-specific extension for .tar, .tgz, and .zip bulk imports.
+// Other S3-compatible services may store the metadata without extracting.
+func (c *Client) PutObjectSnowballAutoExtract(
+	ctx context.Context,
+	bucket string,
+	key string,
+	body io.Reader,
+	contentType string,
+) error {
+	_, err := c.putObject(ctx, bucket, key, body, contentType, snowballAutoExtractMetadata())
 	return err
 }
 
@@ -177,7 +193,7 @@ func (c *Client) PutObjectVersion(
 	body io.Reader,
 	contentType string,
 ) (string, error) {
-	output, err := c.putObject(ctx, bucket, key, body, contentType)
+	output, err := c.putObject(ctx, bucket, key, body, contentType, nil)
 	if err != nil {
 		return "", err
 	}
@@ -190,18 +206,32 @@ func (c *Client) putObject(
 	key string,
 	body io.Reader,
 	contentType string,
+	metadata map[string]string,
 ) (*s3.PutObjectOutput, error) {
 	return c.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucket),
 		Key:         aws.String(key),
 		Body:        body,
 		ContentType: aws.String(contentType),
+		Metadata:    metadata,
 	})
 }
 
 // PutObjectBytes uploads an in-memory byte slice.
 func (c *Client) PutObjectBytes(ctx context.Context, bucket, key string, data []byte, contentType string) error {
 	return c.PutObject(ctx, bucket, key, bytes.NewReader(data), contentType)
+}
+
+// PutObjectBytesSnowballAutoExtract uploads an in-memory archive and asks MinIO
+// to extract it server-side.
+func (c *Client) PutObjectBytesSnowballAutoExtract(
+	ctx context.Context,
+	bucket string,
+	key string,
+	data []byte,
+	contentType string,
+) error {
+	return c.PutObjectSnowballAutoExtract(ctx, bucket, key, bytes.NewReader(data), contentType)
 }
 
 // PutObjectBytesVersion 上传内存字节切片并在桶启用版本控制时返回新对象的 VersionID。
@@ -662,13 +692,25 @@ func joinDeleteErrors(deleteErrs []types.Error) error {
 // UploadFile uploads a local file and infers its content type from the file
 // extension.
 func (c *Client) UploadFile(ctx context.Context, bucket, key, localPath string) error {
-	_, err := c.uploadFile(ctx, bucket, key, localPath)
+	_, err := c.uploadFile(ctx, bucket, key, localPath, nil)
+	return err
+}
+
+// UploadFileSnowballAutoExtract uploads a .tar, .tgz, or .zip archive and asks
+// MinIO to extract it server-side by sending
+// x-amz-meta-snowball-auto-extract: true.
+//
+// This optimizes bulk imports of many small files into MinIO. It is not a
+// portable S3 standard; non-MinIO services may store the archive as a normal
+// object with user metadata and perform no extraction.
+func (c *Client) UploadFileSnowballAutoExtract(ctx context.Context, bucket, key, localPath string) error {
+	_, err := c.uploadFile(ctx, bucket, key, localPath, snowballAutoExtractMetadata())
 	return err
 }
 
 // UploadFileVersion 上传本地文件并在桶启用版本控制时返回新对象的 VersionID。
 func (c *Client) UploadFileVersion(ctx context.Context, bucket, key, localPath string) (string, error) {
-	output, err := c.uploadFile(ctx, bucket, key, localPath)
+	output, err := c.uploadFile(ctx, bucket, key, localPath, nil)
 	if err != nil {
 		return "", err
 	}
@@ -680,6 +722,7 @@ func (c *Client) uploadFile(
 	bucket string,
 	key string,
 	localPath string,
+	metadata map[string]string,
 ) (*transfermanager.UploadObjectOutput, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
@@ -689,11 +732,23 @@ func (c *Client) uploadFile(
 		_ = file.Close()
 	}()
 
+	return c.uploadObject(ctx, bucket, key, file, utils.DetectContentType(localPath), metadata)
+}
+
+func (c *Client) uploadObject(
+	ctx context.Context,
+	bucket string,
+	key string,
+	body io.Reader,
+	contentType string,
+	metadata map[string]string,
+) (*transfermanager.UploadObjectOutput, error) {
 	return c.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket:      aws.String(bucket),
 		Key:         aws.String(key),
-		Body:        file,
-		ContentType: aws.String(utils.DetectContentType(localPath)),
+		Body:        body,
+		ContentType: aws.String(contentType),
+		Metadata:    metadata,
 	})
 }
 
